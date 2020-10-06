@@ -85,6 +85,40 @@ from sklearn.metrics import matthews_corrcoef, f1_score
 def simple_accuracy(preds, labels):
         return (preds == labels).mean()
 
+def loadEmbeddingModel(model, tokenizer):
+  embeddings = {}
+  vocab = tokenizer.get_vocab()
+  inv_vocab = {v: k for k, v in vocab.items()}
+  for i in range(tokenizer.vocab_size):
+    word = inv_vocab[i]
+    text_index = tokenizer.encode(word, add_prefix_space=True)
+    vector = model.transformer.wte.weight[text_index,:]
+    embeddings[i] = vector
+  print ("Done.",len(embeddings)," words loaded!")
+  return embeddings
+
+def distance_loss(documents, distributions, embeddings):
+  losses = []
+  documents = torch.cat((documents,documents), dim=0)
+  for document, distribution in zip(documents, distributions):
+    pred_document = distribution.max(dim=1)[1].reshape(document.size())
+    max_len = max((pred_document!=50256).sum(), (document!=50256).sum())
+    # print(pred_document.size(), document.size())
+    pred_document_embeddings = torch.tensor([], dtype=embeddings[0].dtype, device = embeddings[0].device)
+    for word in pred_document[:max_len]:
+      pred_document_embeddings = torch.cat((pred_document_embeddings, embeddings[word.item()].mean(dim=0, keepdim=True)))
+
+    document_embeddings = torch.tensor([], dtype=embeddings[0].dtype, device = embeddings[0].device)
+    for word in document[:max_len]:
+      document_embeddings = torch.cat((document_embeddings, embeddings[word.item()].mean(dim=0, keepdim=True)))
+    # print(max_len)
+    # print(document_embeddings.size())
+    # print(pred_document_embeddings.size())
+    loss = (((pred_document_embeddings) - (document_embeddings))**2).sum()
+    # print(loss)
+    losses.append(loss.item())
+  return losses
+
 try:
     from torch.utils.tensorboard import SummaryWriter
 except ImportError:
@@ -254,6 +288,9 @@ def train(args, train_dataset, model, tokenizer):
 
     for epoch_ in train_iterator:
 
+        ### get vocab embeddings
+        embeddings = loadEmbeddingModel(model, tokenizer)  
+
         epoch_iterator = train_dataloader
         for step, batch in enumerate(epoch_iterator):
 
@@ -299,6 +336,9 @@ def train(args, train_dataset, model, tokenizer):
 
             outputs = model(**inputs) #modeling_gpt2.py modified to have none reduction
             losses = outputs[0].view(seq_batched.shape[0], -1)
+
+            dist_loss = distance_loss(batch[0], outputs[1], embeddings)
+
             #loss mask includes first padded token
             if args.mask_eos_token:
                 loss_mask = batch[1][:,:-1].to(torch.float16).cuda()
@@ -410,6 +450,7 @@ def train(args, train_dataset, model, tokenizer):
             loss_fn = torch.nn.CrossEntropyLoss()
             loss = loss_fn(class_logits, class_labels)*args.disc_weight + args.gen_weight*gen_loss
 
+            loss.add_(1e-3 * np.mean(dist_loss))
 
             if np.isnan(loss.detach().cpu().numpy()):
                 import pdb; pdb.set_trace()
