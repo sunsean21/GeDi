@@ -447,7 +447,7 @@ def train(args, train_dataset, model, tokenizer):
             loss_fn = torch.nn.CrossEntropyLoss()
             loss = loss_fn(class_logits, class_labels)*args.disc_weight + args.gen_weight*gen_loss
             print("loss is ", loss)
-            loss.add_(1e-3 * np.mean(dist_loss))
+            loss = loss.add_(1e-3 * np.mean(dist_loss))
 
             if np.isnan(loss.detach().cpu().numpy()):
                 import pdb; pdb.set_trace()
