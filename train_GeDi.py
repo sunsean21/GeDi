@@ -104,20 +104,16 @@ def distance_loss(documents, distributions, embeddings):
     pred_document = distribution.max(dim=1)[1].reshape(document.size())
     max_len = max((pred_document!=50256).sum(), (document!=50256).sum())
     # print(pred_document.size(), document.size())
-    pred_document_embeddings = torch.tensor([], dtype=embeddings[0].dtype, device = embeddings[0].device)
-    for word in pred_document[:max_len]:
-      pred_document_embeddings = torch.cat((pred_document_embeddings, embeddings[word.item()].mean(dim=0, keepdim=True)))
-
-    document_embeddings = torch.tensor([], dtype=embeddings[0].dtype, device = embeddings[0].device)
-    for word in document[:max_len]:
-      document_embeddings = torch.cat((document_embeddings, embeddings[word.item()].mean(dim=0, keepdim=True)))
-    # print(max_len)
-    # print(document_embeddings.size())
-    # print(pred_document_embeddings.size())
-    loss = (((pred_document_embeddings) - (document_embeddings))**2).sum()
+    loss = 0
+    for word_id in range(max_len):
+      loss += ((embeddings[pred_document[word_id].item()].mean(dim=0, keepdim=True) - embeddings[document[word_id].item()].mean(dim=0, keepdim=True))**2).sum()
     # print(loss)
     losses.append(loss.item())
+    del pred_document, document, distribution
+  del documents
+  torch.cuda.empty_cache()
   return losses
+
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -288,9 +284,7 @@ def train(args, train_dataset, model, tokenizer):
 
     for epoch_ in train_iterator:
 
-        ### get vocab embeddings
-        embeddings = loadEmbeddingModel(model, tokenizer)  
-
+        
         epoch_iterator = train_dataloader
         for step, batch in enumerate(epoch_iterator):
 
@@ -336,6 +330,9 @@ def train(args, train_dataset, model, tokenizer):
 
             outputs = model(**inputs) #modeling_gpt2.py modified to have none reduction
             losses = outputs[0].view(seq_batched.shape[0], -1)
+
+            ### get vocab embeddings
+            embeddings = loadEmbeddingModel(model, tokenizer)  
 
             dist_loss = distance_loss(batch[0], outputs[1], embeddings)
 
@@ -449,7 +446,7 @@ def train(args, train_dataset, model, tokenizer):
 
             loss_fn = torch.nn.CrossEntropyLoss()
             loss = loss_fn(class_logits, class_labels)*args.disc_weight + args.gen_weight*gen_loss
-
+            print("loss is ", loss)
             loss.add_(1e-3 * np.mean(dist_loss))
 
             if np.isnan(loss.detach().cpu().numpy()):
@@ -900,10 +897,10 @@ def main():
     )
 
     parser.add_argument(
-        "--per_gpu_train_batch_size", default=8, type=int, help="Batch size per GPU/CPU for training.",
+        "--per_gpu_train_batch_size", default=2, type=int, help="Batch size per GPU/CPU for training.",
     )
     parser.add_argument(
-        "--per_gpu_eval_batch_size", default=8, type=int, help="Batch size per GPU/CPU for evaluation.",
+        "--per_gpu_eval_batch_size", default=2, type=int, help="Batch size per GPU/CPU for evaluation.",
     )
     parser.add_argument(
         "--gradient_accumulation_steps",
